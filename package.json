@@ -1,0 +1,24 @@
+{
+  "name": "swimming-pool-hk-scraper",
+  "module": "src/index.ts",
+  "type": "module",
+  "scripts": {
+    "start": "bun src/index.ts",
+    "admission": "bun src/index.ts admission",
+    "basic": "bun src/index.ts basic",
+    "build": "bun build ./src/index.ts --compile --outfile=swimming-pool-hk-scraper"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.4"
+  },
+  "peerDependencies": {
+    "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "cheerio": "^1.2.0",
+    "date-fns": "^4.4.0",
+    "date-fns-tz": "^3.2.0",
+    "lowdb": "^7.0.1"
+  },
+  "private": true
+}
