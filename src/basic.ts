@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import type { BasicData } from "./types";
 
 interface Venue {
   Name_en: string;
@@ -29,19 +30,7 @@ interface GeoJSON {
   features: Feature[];
 }
 
-interface FinalPool {
-  name_en: string;
-  name_tc: string;
-  address_en: string;
-  address_tc: string;
-  district_en: string;
-  district_tc: string;
-  url_en: string;
-  url_tc: string;
-  coordinates: [number, number] | null;
-}
-
-export async function fetchAndMergeSwimmingPools(): Promise<void> {
+export async function saveBasicData(): Promise<void> {
   const venuesUrl = "http://www.lcsd.gov.hk/datagovhk/venue/venue.json";
   const geojsonUrl =
     "https://portal.csdi.gov.hk/csdi-webpage/file-api?dataset_id=lcsd_rcd_1634540558875_77434&format=geojson&layer_name=SP";
@@ -69,7 +58,7 @@ export async function fetchAndMergeSwimmingPools(): Promise<void> {
     );
 
     // 2. Join the data with the GeoJSON features to grab the coordinates
-    const finalData: FinalPool[] = swimmingPools.map((venue) => {
+    const finalData: BasicData[] = swimmingPools.map((venue) => {
       // Normalize names for comparison (handles case differences like "Swimming pool" vs "Swimming Pool")
       const normalizedVenueName = venue.Name_en.trim().toLowerCase();
 

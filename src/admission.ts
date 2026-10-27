@@ -3,22 +3,9 @@ import * as fs from "fs";
 import * as path from "path";
 import { JSONFilePreset } from "lowdb/node";
 import { formatInTimeZone } from "date-fns-tz";
+import type { AdmissionData, AdmissionDetails } from "./types";
 
-interface SwimmingPool {
-  district: string;
-  name: string;
-  status: string;
-  maximumCapacity?: number;
-  currentAdmission?: number;
-  allowedAdmission?: number;
-}
-
-interface PoolDataResponse {
-  timestamp: number;
-  data: SwimmingPool[];
-}
-
-async function fetchSwimmingPoolData(): Promise<PoolDataResponse | null> {
+async function fetchSwimmingPoolData(): Promise<AdmissionData | null> {
   const url = "https://lcsd-swimming.xports.cn/swimming-pool-page?language=en";
 
   try {
@@ -35,7 +22,7 @@ async function fetchSwimmingPoolData(): Promise<PoolDataResponse | null> {
     const html = await response.text();
     const $ = cheerio.load(html);
 
-    const pools: SwimmingPool[] = [];
+    const pools: AdmissionDetails[] = [];
     let currentDistrict = "";
     let districtRowsLeft = 0;
 
@@ -64,15 +51,15 @@ async function fetchSwimmingPoolData(): Promise<PoolDataResponse | null> {
 
       districtRowsLeft--;
 
-      const name = $(tds[startIndex]).text().replace(/\s+/g, " ").trim();
+      const name_en = $(tds[startIndex]).text().replace(/\s+/g, " ").trim();
       const status = $(tds[startIndex + 1])
         .text()
         .replace(/\s+/g, " ")
         .trim();
 
-      const pool: SwimmingPool = {
+      const pool: AdmissionDetails = {
         district: currentDistrict,
-        name,
+        name_en,
         status,
       };
 
@@ -107,7 +94,7 @@ async function fetchSwimmingPoolData(): Promise<PoolDataResponse | null> {
     });
 
     // Construct the final structured response
-    const result: PoolDataResponse = {
+    const result: AdmissionData = {
       timestamp,
       data: pools,
     };
@@ -146,16 +133,13 @@ export async function saveAdmissionData(): Promise<void> {
 
   // Write to data/admission/latest.json (overwrites with the exact latest format)
   const latestDbPath = path.join(baseDir, "latest.json");
-  const latestDb = await JSONFilePreset<PoolDataResponse | {}>(
-    latestDbPath,
-    {},
-  );
+  const latestDb = await JSONFilePreset<AdmissionData | {}>(latestDbPath, {});
   latestDb.data = result;
   await latestDb.write();
 
   // Write to data/admission/YYYY/YYYY-MM-DD.json (appends to an array of fetches for that day)
   const dailyDbPath = path.join(yearDir, `${YYYY_MM_DD}.json`);
-  const dailyDb = await JSONFilePreset<PoolDataResponse[]>(dailyDbPath, []);
+  const dailyDb = await JSONFilePreset<AdmissionData[]>(dailyDbPath, []);
   dailyDb.data.push(result);
   await dailyDb.write();
 

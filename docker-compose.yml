@@ -1,0 +1,14 @@
+services:
+  crawl4ai:
+    image: unclecode/crawl4ai:0.9.2
+    ports:
+      - "11235:11235"
+    shm_size: 1g
+    environment:
+      CRAWL4AI_API_TOKEN: ${CRAWL4AI_API_TOKEN:?Set CRAWL4AI_API_TOKEN}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11235/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
