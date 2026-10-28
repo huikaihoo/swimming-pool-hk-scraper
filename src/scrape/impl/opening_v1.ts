@@ -3,7 +3,14 @@ import { Lang } from "../types";
 import type { OpeningOutput, ScrapeInput, ScrapeOutput } from "../types";
 import { getClairicAnswers, getNullableStringAnswer } from "../utils";
 
-function extractOpeningSchedules(html: string): string[] {
+type OpeningScheduleCandidate = {
+  title: string;
+  lines: string[];
+};
+
+function extractOpeningScheduleCandidates(
+  html: string,
+): OpeningScheduleCandidate[] {
   const $ = load(html);
   const headings = $("h1, h2, h3, h4, h5, h6, [role='heading'], .panel-heading")
     .filter((_, element) =>
@@ -17,41 +24,108 @@ function extractOpeningSchedules(html: string): string[] {
     );
   }
 
-  return headings.map((heading) => {
+  const candidates: OpeningScheduleCandidate[] = [];
+  const seenTables = new Set<object>();
+  const getCellLines = (cell: string): string[] => {
+    const cellHtml = cell
+      .replace(/<br\b[^>]*>/gi, "\n")
+      .replace(/<\/(?:p|div|li)\s*>/gi, "\n");
+    return load(`<div>${cellHtml}</div>`)("body")
+      .text()
+      .split(/\r?\n/)
+      .filter((line) => line.trim());
+  };
+
+  for (const heading of headings.reverse()) {
     const title = $(heading).text().trim();
-    const table = $(heading).closest("tr").next().find("table").first();
-    if (table.length === 0) {
-      throw new Error(`Could not find the table below "${title}".`);
-    }
+    const tables = $(heading).closest("tr").next().find("table").toArray();
+    const leafTables = tables.filter(
+      (table) => $(table).find("table").length === 0,
+    );
+    const scheduleTables = (leafTables.length > 0 ? leafTables : tables).reverse();
 
-    const lines = table
-      .find("tr")
-      .toArray()
-      .flatMap((row) => {
-        const cell = $(row)
-          .children("td")
-          .toArray()
-          .reverse()
-          .find((element) => /session/i.test($(element).text()));
-        if (!cell) return [];
+    for (const table of scheduleTables) {
+      if (seenTables.has(table)) continue;
+      seenTables.add(table);
 
-        const cellHtml = ($(cell).html() ?? "")
-          .replace(/<br\b[^>]*>/gi, "\n")
-          .replace(/<\/(?:p|div|li)\s*>/gi, "\n");
-        const fragment = load(`<div>${cellHtml}</div>`);
-        return fragment("body")
-          .text()
-          .split(/\r?\n/)
-          .map((line) => line.trim())
-          .filter(Boolean);
+      const rows = $(table).find("tr").toArray();
+      const grid: Array<Array<number | undefined>> = [];
+      const cells: Array<{ lines: string[]; rowIndex: number }> = [];
+
+      rows.forEach((row, rowIndex) => {
+        const rowCells = $(row).children("td, th").toArray();
+        let columnIndex = 0;
+
+        for (const cell of rowCells) {
+          while (grid[rowIndex]?.[columnIndex] !== undefined) columnIndex++;
+
+          const cellIndex = cells.length;
+          cells.push({
+            lines: getCellLines($(cell).html() ?? ""),
+            rowIndex,
+          });
+
+          const parsedColSpan = Number.parseInt(
+            $(cell).attr("colspan") ?? "1",
+            10,
+          );
+          const parsedRowSpan = Number.parseInt(
+            $(cell).attr("rowspan") ?? "1",
+            10,
+          );
+          const colSpan =
+            Number.isFinite(parsedColSpan) && parsedColSpan > 0
+              ? parsedColSpan
+              : 1;
+          const rowSpan =
+            Number.isFinite(parsedRowSpan) && parsedRowSpan > 0
+              ? parsedRowSpan
+              : 1;
+
+          for (let rowOffset = 0; rowOffset < rowSpan; rowOffset++) {
+            const targetRow = rowIndex + rowOffset;
+            grid[targetRow] ??= [];
+            for (let columnOffset = 0; columnOffset < colSpan; columnOffset++) {
+              grid[targetRow]![columnIndex + columnOffset] = cellIndex;
+            }
+          }
+
+          columnIndex += colSpan;
+        }
       });
 
-    if (lines.length === 0) {
-      throw new Error(`Could not find a session column below "${title}".`);
-    }
+      const columnCount = grid.reduce(
+        (max, row) => Math.max(max, row.length),
+        0,
+      );
 
-    return [title, ...lines].join("\n");
-  });
+      for (let columnIndex = columnCount - 1; columnIndex >= 0; columnIndex--) {
+        const lines: string[] = [];
+        const seenCells = new Set<number>();
+
+        grid.forEach((row, rowIndex) => {
+          const cellIndex = row[columnIndex];
+          if (cellIndex === undefined || seenCells.has(cellIndex)) return;
+
+          const cell = cells[cellIndex];
+          if (!cell || cell.rowIndex !== rowIndex) return;
+
+          seenCells.add(cellIndex);
+          lines.push(...cell.lines);
+        });
+
+        if (lines.length > 0) candidates.push({ title, lines });
+      }
+    }
+  }
+
+  if (candidates.length === 0) {
+    throw new Error(
+      'Could not find a table below "Opening Schedule Information".',
+    );
+  }
+
+  return candidates;
 }
 
 export async function scrapeOpening_v1(
@@ -85,19 +159,22 @@ export async function scrapeOpening_v1(
       html = await pageResponse.text();
     }
 
-    for (const state of extractOpeningSchedules(html)) {
+    const fields = Object.fromEntries(
+      [1, 2, 3].flatMap((session) =>
+        ["start", "end"].map((boundary) => [
+          `session_${session}_${boundary}_time`,
+          {
+            type: "time",
+            instructions: `Extract the ${boundary} time of opening session ${session}. Use the session time, not a session break. Infer AM or PM from the stated range; nn means noon. Each session starts and ends will not overlap with other sessions.`,
+          },
+        ]),
+      ),
+    );
+
+    for (const candidate of extractOpeningScheduleCandidates(html)) {
+      const state = [candidate.title, ...candidate.lines].join("\n");
       process.stdout.write(`${state}\n`);
-      const fields = Object.fromEntries(
-        [1, 2, 3].flatMap((session) =>
-          ["start", "end"].map((boundary) => [
-            `session_${session}_${boundary}_time`,
-            {
-              type: "time",
-              instructions: `Extract the ${boundary} time of opening session ${session}. Use the session time, not a session break. Infer AM or PM from the stated range; nn means noon. Each session starts and ends will not overlap with other sessions.`,
-            },
-          ]),
-        ),
-      );
+
       const clairicResponse = await fetch(
         `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/@cf/cloudflare/clairic`,
         {
@@ -118,42 +195,67 @@ export async function scrapeOpening_v1(
         if (clairicText && !clairicText.endsWith("\n")) {
           process.stdout.write("\n");
         }
-        console.error("Cloudflare returned a non-JSON response.");
-        process.exitCode = 1;
-        continue;
+        throw new Error("Cloudflare returned a non-JSON response.");
       }
 
       process.stdout.write(`${JSON.stringify(clairicResult, null, 2)}\n`);
       if (!clairicResponse.ok) {
-        process.exitCode = 1;
+        throw new Error(
+          `Cloudflare opening schedule request failed (HTTP ${clairicResponse.status}).`,
+        );
+      }
+
+      let sessions: OpeningOutput[];
+      try {
+        const answers = getClairicAnswers(clairicResult);
+        sessions = [];
+        for (const session of [1, 2, 3]) {
+          const startTime = getNullableStringAnswer(
+            answers,
+            `session_${session}_start_time`,
+          );
+          const endTime = getNullableStringAnswer(
+            answers,
+            `session_${session}_end_time`,
+          );
+          if (startTime === null && endTime === null) continue;
+          if (startTime === null || endTime === null) {
+            throw new Error(
+              `Clairic returned an incomplete opening session ${session}.`,
+            );
+          }
+          sessions.push({ start_time: startTime, end_time: endTime });
+        }
+      } catch (error) {
+        console.error(
+          "Invalid opening schedule response; checking an earlier table column:",
+          error instanceof Error ? error.message : error,
+        );
         continue;
       }
 
-      const answers = getClairicAnswers(clairicResult);
-      const sessions: OpeningOutput[] = [];
-      for (const session of [1, 2, 3]) {
-        const startTime = getNullableStringAnswer(
-          answers,
-          `session_${session}_start_time`,
+      if (sessions.length === 0) {
+        console.error(
+          "No opening sessions in the response; checking an earlier table column.",
         );
-        const endTime = getNullableStringAnswer(
-          answers,
-          `session_${session}_end_time`,
-        );
-        if (startTime === null && endTime === null) continue;
-        if (startTime === null || endTime === null) {
-          throw new Error(
-            `Clairic returned an incomplete opening session ${session}.`,
-          );
-        }
-        sessions.push({ start_time: startTime, end_time: endTime });
+        continue;
       }
 
-      openings.push(...sessions);
-      process.stdout.write(`${JSON.stringify(sessions, null, 2)}\n`);
+      const uniqueSessions = new Map(
+        sessions.map((session) => [
+          `${session.start_time}/${session.end_time}`,
+          session,
+        ]),
+      );
+      const uniqueSessionValues = [...uniqueSessions.values()];
+      openings.push(...uniqueSessionValues);
+      process.stdout.write(`${JSON.stringify(uniqueSessionValues, null, 2)}\n`);
+      return { data: openings, html };
     }
 
-    return { data: openings, html };
+    throw new Error(
+      'Could not find a valid session schedule in any "Opening Schedule Information" table column.',
+    );
   } catch (error) {
     console.error(
       "Failed to scrape opening schedule:",
